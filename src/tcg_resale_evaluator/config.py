@@ -14,6 +14,12 @@ class AppConfig:
     data_name: str = "Data"
     poll_seconds: float = 1.0
     settle_seconds: float = 4.0
+    worker_poll_seconds: float = 2.0
+    max_file_bytes: int = 50 * 1024 * 1024
+    max_image_pixels: int = 40_000_000
+    max_dimension: int = 20_000
+    prepared_max_dimension: int = 2400
+    duplicate_hash_distance: int = 4
 
     @property
     def intake_dir(self) -> Path:

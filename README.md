@@ -2,7 +2,7 @@
 
 Local-first tooling for organizing, preparing, indexing, and reviewing TCG collection listings for resale opportunities.
 
-## What v0.1 does
+## What the app does
 
 - Reusable `New Folder` intake for photos and screenshots.
 - One-click **Process Current Lot** submission from the desktop app.
@@ -10,6 +10,17 @@ Local-first tooling for organizing, preparing, indexing, and reviewing TCG colle
 - Waits for Google Drive uploads to settle before moving the lot.
 - Moves the lot into `Processing` and immediately recreates an empty `New Folder`.
 - Deletes the `process` trigger only after a successful move and replacement-folder creation.
+- Atomically claims queued lots so concurrent workers cannot process the same folder. Claims left
+  by a stopped process are safely returned to the queue on the next run.
+- Preserves every source image byte-for-byte under `Originals/`.
+- Accepts JPEG, PNG, and WebP images and applies file-size, pixel-count, dimension, malformed-file,
+  and Pillow decompression-bomb protections before normalization.
+- Applies EXIF orientation, creates bounded JPEG copies under `Prepared/Images/`, and detects exact
+  plus lightweight perceptual duplicates.
+- Creates a contact sheet, conservative `possible_` category filenames, `rename_manifest.csv`,
+  `listing_data.json`, `listing_summary.md`, and `chatgpt_prompt.txt`.
+- Moves successful lots to `Completed` and safety/validation failures to `Needs Review` with an
+  `error_report.json`; originals remain available in either route.
 - Maintains a searchable master CSV deal index.
 - Imports a final post-sort inventory CSV, preserves the source, normalizes card/pricing data, and creates a buylist-formatted CSV using a profile.
 - Includes automated tests and security checks for secret leakage, unsafe paths, Python security issues, and vulnerable dependencies.
@@ -43,3 +54,20 @@ tcg-resale-doctor
 ```
 
 Set `TCG_RESALE_ROOT` if your Google Drive folder lives somewhere else.
+
+## Completed lot layout
+
+```text
+Completed/LOT-.../
+├── Originals/                 # unchanged uploaded files
+└── Prepared/
+    ├── Images/                # oriented, resized JPEG copies
+    ├── contact_sheet.jpg
+    ├── rename_manifest.csv
+    ├── listing_data.json
+    ├── listing_summary.md
+    └── chatgpt_prompt.txt
+```
+
+The desktop app runs the processor in the background. Logs are rotated under
+`Data/logs/tcg-resale-evaluator.log`.

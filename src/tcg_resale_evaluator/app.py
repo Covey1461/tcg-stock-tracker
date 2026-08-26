@@ -9,6 +9,8 @@ from tkinter import filedialog, messagebox, ttk
 from .config import AppConfig
 from .intake import SubmissionError, submit_current_lot
 from .inventory_flow import import_inventory_for_lot
+from .logging_config import configure_logging
+from .processor import ProcessingWorker
 from .watcher import IntakeWatcher
 
 
@@ -39,7 +41,9 @@ class App(tk.Tk):
         container = ttk.Frame(self, padding=18)
         container.pack(fill="both", expand=True)
 
-        ttk.Label(container, text="TCG Resale Evaluator", font=("Segoe UI", 18, "bold")).pack(anchor="w")
+        ttk.Label(container, text="TCG Resale Evaluator", font=("Segoe UI", 18, "bold")).pack(
+            anchor="w"
+        )
         ttk.Label(container, textvariable=self.path_var).pack(anchor="w", pady=(4, 18))
 
         primary = ttk.Button(container, text="Process Current Lot", command=self.process_now)
@@ -47,19 +51,31 @@ class App(tk.Tk):
 
         actions = ttk.Frame(container)
         actions.pack(fill="x", pady=10)
-        ttk.Button(actions, text="Open New Folder", command=lambda: open_path(config.intake_dir)).pack(side="left", expand=True, fill="x", padx=(0, 4))
-        ttk.Button(actions, text="Open Processing", command=lambda: open_path(config.processing_dir)).pack(side="left", expand=True, fill="x", padx=4)
-        ttk.Button(actions, text="Open Completed", command=lambda: open_path(config.completed_dir)).pack(side="left", expand=True, fill="x", padx=(4, 0))
+        ttk.Button(
+            actions, text="Open New Folder", command=lambda: open_path(config.intake_dir)
+        ).pack(side="left", expand=True, fill="x", padx=(0, 4))
+        ttk.Button(
+            actions, text="Open Processing", command=lambda: open_path(config.processing_dir)
+        ).pack(side="left", expand=True, fill="x", padx=4)
+        ttk.Button(
+            actions, text="Open Completed", command=lambda: open_path(config.completed_dir)
+        ).pack(side="left", expand=True, fill="x", padx=(4, 0))
 
         ttk.Separator(container).pack(fill="x", pady=16)
 
         ttk.Label(container, text="Post-sort inventory").pack(anchor="w")
-        ttk.Button(container, text="Import Inventory CSV for a Lot", command=self.import_inventory).pack(fill="x", pady=(6, 0), ipady=6)
+        ttk.Button(
+            container, text="Import Inventory CSV for a Lot", command=self.import_inventory
+        ).pack(fill="x", pady=(6, 0), ipady=6)
 
-        ttk.Label(container, textvariable=self.status_var, wraplength=650).pack(anchor="w", pady=(22, 0))
+        ttk.Label(container, textvariable=self.status_var, wraplength=650).pack(
+            anchor="w", pady=(22, 0)
+        )
 
         self.watcher = IntakeWatcher(config, on_status=self._threadsafe_status)
+        self.worker = ProcessingWorker(config, on_status=self._threadsafe_status)
         self.watcher.start()
+        self.worker.start()
         self.protocol("WM_DELETE_WINDOW", self.on_close)
 
     def _threadsafe_status(self, message: str) -> None:
@@ -87,21 +103,17 @@ class App(tk.Tk):
         if not csv_path:
             return
 
-        profile_path = Path(__file__).resolve().parents[2] / "profiles" / "default-buylist.json"
-        if not profile_path.exists():
-            picked = filedialog.askopenfilename(
-                title="Choose buylist profile JSON",
-                filetypes=[("JSON files", "*.json")],
-            )
-            if not picked:
-                return
-            profile_path = Path(picked)
-
         def work() -> None:
             try:
-                result = import_inventory_for_lot(Path(lot_folder), Path(csv_path), profile_path)
-            except Exception as exc:
-                self.after(0, lambda: messagebox.showerror("Inventory import failed", str(exc)))
+                result = import_inventory_for_lot(Path(lot_folder), Path(csv_path))
+            except (OSError, ValueError) as exc:
+                error_message = str(exc)
+                self.after(
+                    0,
+                    lambda message=error_message: messagebox.showerror(
+                        "Inventory import failed", message
+                    ),
+                )
                 return
             text = (
                 f"Imported {result.summary.rows} rows / {result.summary.quantity} cards. "
@@ -114,6 +126,7 @@ class App(tk.Tk):
 
     def on_close(self) -> None:
         self.watcher.stop()
+        self.worker.stop()
         self.destroy()
 
 
@@ -127,6 +140,7 @@ def choose_root() -> Path:
 
 def main() -> None:
     config = AppConfig(root=choose_root())
+    configure_logging(config)
     app = App(config)
     app.mainloop()
 

@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import csv
+import threading
 from dataclasses import asdict, dataclass
 from pathlib import Path
-
 
 INDEX_FIELDS = [
     "lot_id",
@@ -24,6 +24,8 @@ INDEX_FIELDS = [
     "roi_percent",
     "notes",
 ]
+
+_INDEX_LOCK = threading.Lock()
 
 
 @dataclass(slots=True)
@@ -57,24 +59,32 @@ class DealIndex:
         with self.csv_path.open("r", newline="", encoding="utf-8-sig") as handle:
             return list(csv.DictReader(handle))
 
-    def upsert(self, row: DealIndexRow) -> None:
-        self.csv_path.parent.mkdir(parents=True, exist_ok=True)
-        rows = self._read_all()
-        payload = {field: str(asdict(row).get(field, "")) for field in INDEX_FIELDS}
-        replaced = False
-        for index, existing in enumerate(rows):
-            if existing.get("lot_id") == row.lot_id:
-                merged = {field: existing.get(field, "") for field in INDEX_FIELDS}
-                merged.update(payload)
-                rows[index] = merged
-                replaced = True
-                break
-        if not replaced:
-            rows.append(payload)
+    def upsert(self, row: DealIndexRow, *, preserve_existing: bool = False) -> None:
+        with _INDEX_LOCK:
+            self.csv_path.parent.mkdir(parents=True, exist_ok=True)
+            rows = self._read_all()
+            payload = {field: str(asdict(row).get(field, "")) for field in INDEX_FIELDS}
+            replaced = False
+            for index, existing in enumerate(rows):
+                if existing.get("lot_id") == row.lot_id:
+                    merged = {field: existing.get(field, "") for field in INDEX_FIELDS}
+                    if preserve_existing:
+                        for field, value in payload.items():
+                            if field in {"lot_id", "status", "folder", "notes"} or not merged.get(
+                                field
+                            ):
+                                merged[field] = value
+                    else:
+                        merged.update(payload)
+                    rows[index] = merged
+                    replaced = True
+                    break
+            if not replaced:
+                rows.append(payload)
 
-        temp = self.csv_path.with_suffix(".tmp")
-        with temp.open("w", newline="", encoding="utf-8-sig") as handle:
-            writer = csv.DictWriter(handle, fieldnames=INDEX_FIELDS)
-            writer.writeheader()
-            writer.writerows(rows)
-        temp.replace(self.csv_path)
+            temp = self.csv_path.with_suffix(".tmp")
+            with temp.open("w", newline="", encoding="utf-8-sig") as handle:
+                writer = csv.DictWriter(handle, fieldnames=INDEX_FIELDS)
+                writer.writeheader()
+                writer.writerows(rows)
+            temp.replace(self.csv_path)

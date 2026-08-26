@@ -18,8 +18,27 @@
 - `csv_tools.py`: inventory normalization and template-driven buylist export.
 - `inventory_flow.py`: preserves the raw CSV and creates normalized + buylist outputs.
 - `index_store.py`: master searchable CSV index.
+- `processor.py`: claims, validates, prepares, indexes, and routes queued image lots.
+- `logging_config.py`: bounded rotating application logs under `Data/logs`.
 - `app.py`: lightweight Windows-friendly desktop UI.
 
 ## Why polling instead of filesystem events?
 
 Google Drive sync can produce bursts of filesystem events and temporary states. A small polling loop is simpler and more predictable for this use case. The watcher also requires the intake folder signature to remain unchanged for a short settle window before submitting from a phone trigger.
+# Processing boundary
+
+`processor.py` is the local queue consumer. Queue ownership is established by an atomic directory
+rename that includes the worker process ID. This avoids shared lock services and remains compatible
+with a Google Drive-backed root. Dead-process claims are recoverable.
+
+Original uploads and generated files have a strict boundary:
+
+- `Originals/` contains only preserved intake files.
+- `Prepared.__building__/` is an internal staging directory.
+- `Prepared/` appears only after every output has been written successfully.
+
+This staging boundary makes retries predictable and prevents a partial artifact set from looking
+complete. Deal-index writes use an in-process lock and an atomic temporary-file replacement.
+
+Image categorization is deliberately heuristic and local. The worker does not call OCR, OpenAI, or
+any external service, and it does not require credentials.

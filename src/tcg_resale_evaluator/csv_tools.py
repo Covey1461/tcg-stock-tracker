@@ -2,11 +2,10 @@ from __future__ import annotations
 
 import csv
 import json
+from collections.abc import Iterable
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from typing import Iterable
-
 
 ALIASES = {
     "quantity": {"quantity", "qty", "count", "copies"},
@@ -50,11 +49,11 @@ def _header_map(headers: Iterable[str]) -> dict[str, str]:
 def _decimal(value: str) -> Decimal:
     clean = value.strip().replace("$", "").replace(",", "")
     if not clean:
-        return Decimal("0")
+        return Decimal(0)
     try:
         return Decimal(clean)
     except InvalidOperation:
-        return Decimal("0")
+        return Decimal(0)
 
 
 def _quantity(value: str) -> int:
@@ -82,7 +81,7 @@ def normalize_inventory_csv(input_csv: Path, output_csv: Path) -> InventorySumma
 
         normalized_rows: list[dict[str, str]] = []
         total_qty = 0
-        total_value = Decimal("0")
+        total_value = Decimal(0)
 
         for source in reader:
             name = (source.get(mapping["name"], "") or "").strip()
@@ -129,8 +128,12 @@ class BuylistProfile:
     columns: tuple[BuylistColumn, ...]
 
     @classmethod
-    def from_json(cls, path: Path) -> "BuylistProfile":
-        payload = json.loads(path.read_text(encoding="utf-8"))
+    def from_json(cls, path: Path) -> BuylistProfile:
+        return cls.from_json_text(path.read_text(encoding="utf-8"))
+
+    @classmethod
+    def from_json_text(cls, text: str) -> BuylistProfile:
+        payload = json.loads(text)
         return cls(
             name=payload["name"],
             columns=tuple(BuylistColumn(**column) for column in payload["columns"]),
