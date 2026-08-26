@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tcg-resale-evaluator"
+version = "0.1.0"
+description = "Local-first TCG resale listing intake, preparation, indexing, and buylist export tool"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "Pillow>=12.3.0,<13",
+]
+
+[project.optional-dependencies]
+ocr = ["pytesseract>=0.3.13"]
+dev = ["pytest>=8.0", "ruff>=0.6", "bandit==1.9.4", "pip-audit==2.10.1"]
+
+[project.scripts]
+tcg-resale-evaluator = "tcg_resale_evaluator.app:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
