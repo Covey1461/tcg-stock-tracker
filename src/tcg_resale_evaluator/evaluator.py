@@ -20,6 +20,7 @@ from .processor import _pid_is_running
 
 logger = logging.getLogger(__name__)
 CLAIM_NAME = ".evaluation_claim.json"
+EVALUATOR_VERSION = 2
 
 
 class EvaluationError(RuntimeError):
@@ -69,6 +70,28 @@ def _schema() -> dict[str, Any]:
             "unit_market_high", "notes", "sources",
         ],
     }
+    bulk_lot = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "claimed_quantity": {"type": ["integer", "null"], "minimum": 1},
+            "estimated_unitemized_quantity": {"type": ["integer", "null"], "minimum": 1},
+            "market_low": {"type": ["number", "null"], "minimum": 0},
+            "market_high": {"type": ["number", "null"], "minimum": 0},
+            "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+            "basis": {"type": "string"},
+            "sources": {"type": "array", "items": source},
+        },
+        "required": [
+            "claimed_quantity",
+            "estimated_unitemized_quantity",
+            "market_low",
+            "market_high",
+            "confidence",
+            "basis",
+            "sources",
+        ],
+    }
     return {
         "type": "object",
         "additionalProperties": False,
@@ -76,6 +99,7 @@ def _schema() -> dict[str, Any]:
             "tcg": {"type": "string"},
             "asking_price": {"type": ["number", "null"], "minimum": 0},
             "cards": {"type": "array", "items": card},
+            "bulk_lot": bulk_lot,
             "unidentified_items": {"type": "array", "items": {"type": "string"}},
             "uncertainties": {"type": "array", "items": {"type": "string"}},
             "recommended_photos": {"type": "array", "items": {"type": "string"}},
@@ -83,7 +107,7 @@ def _schema() -> dict[str, Any]:
             "summary": {"type": "string"},
         },
         "required": [
-            "tcg", "asking_price", "cards", "unidentified_items", "uncertainties",
+            "tcg", "asking_price", "cards", "bulk_lot", "unidentified_items", "uncertainties",
             "recommended_photos", "review_required", "summary",
         ],
     }
@@ -99,6 +123,23 @@ def _fingerprint(prepared: Path) -> str:
             for chunk in iter(lambda: handle.read(1024 * 1024), b""):
                 digest.update(chunk)
     return digest.hexdigest()
+
+
+def _evaluation_needs_upgrade(payload: dict[str, Any]) -> bool:
+    version = int(payload.get("evaluator_version", 1))
+    cards = payload.get("identification", {}).get("cards", [])
+    resale = float(payload.get("calculation", {}).get("expected_resale", 0) or 0)
+    return version < EVALUATOR_VERSION and not cards and resale <= 0
+
+
+def _archive_previous_evaluation(lot: Path, payload: dict[str, Any]) -> Path:
+    version = int(payload.get("evaluator_version", 1))
+    destination = lot / f"Evaluation.previous-v{version}"
+    if destination.exists():
+        timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+        destination = lot / f"Evaluation.previous-v{version}-{timestamp}"
+    (lot / "Evaluation").rename(destination)
+    return destination
 
 
 def _claim(lot: Path) -> bool:
@@ -174,6 +215,20 @@ def _enforce_web_evidence(result: dict[str, Any], actual_urls: set[str]) -> None
             card["unit_market_low"] = None
             card["unit_market_high"] = None
             missing_evidence = True
+    bulk = result.get("bulk_lot", {})
+    bulk["sources"] = [
+        source
+        for source in bulk.get("sources", [])
+        if str(source.get("url", "")).strip() in actual_urls
+    ]
+    if (
+        bulk.get("market_low") is not None
+        and bulk.get("market_high") is not None
+        and not bulk.get("sources")
+    ):
+        bulk["market_low"] = None
+        bulk["market_high"] = None
+        missing_evidence = True
     if missing_evidence:
         result["review_required"] = True
         result.setdefault("uncertainties", []).append(
@@ -198,12 +253,26 @@ def _request(client: ResponsesClient, config: AppConfig, lot: Path) -> tuple[dic
         {
             "type": "input_text",
             "text": (
-                "Evaluate this TCG resale lot in USD. Identify only legible cards and physical "
-                "quantities; image-file duplicates are described in listing_data and must not inflate "
-                "quantity. Use web search for current, printing-specific market evidence. Prefer sold "
-                "or reputable marketplace data, use conservative ranges, and never invent unreadable "
-                "details. Asking price may be null. retrieved_at must be today's ISO date. Flag uncertain "
-                "printing, finish, authenticity, or condition and request the minimum useful extra photos.\n\n"
+                "Evaluate this TCG resale lot in USD. Your primary objective is to extract useful "
+                "card-level evidence from the photos, not to reject the lot for ordinary uncertainty. "
+                "Inspect every individual image systematically and list every visible card whose name "
+                "you can identify with reasonable confidence (about 0.60 or higher), even when its exact "
+                "set, collector number, finish, or condition is uncertain. If the card name is readable "
+                "but the printing is unclear, use set_name='Unknown printing', use null collector_number, "
+                "and price the cheapest commonly traded English nonfoil printing conservatively. State "
+                "that basis in notes. Do not exclude a named card merely because its back, corners, or "
+                "foil treatment are not shown. Never invent a name that is not reasonably supported. "
+                "Image-file duplicates are described in listing_data and must not inflate physical "
+                "quantity.\n\n"
+                "Also value the unitemized remainder as bulk when the listing text or photos support a "
+                "quantity estimate. bulk_lot.market_low/high must cover only the remaining unsorted cards "
+                "after the individually listed visible cards, so do not double-count. Use conservative "
+                "current bulk comps and clearly distinguish seller-claimed quantity from visible evidence. "
+                "Use web search for current card and bulk evidence; prefer sold or reputable marketplace "
+                "data. retrieved_at must be today's ISO date. Set review_required only when no meaningful "
+                "valuation is possible or a specific ambiguity could reverse the recommended deal action. "
+                "Routine printing, finish, or condition uncertainty should cause a conservative discount "
+                "and a check item, not automatic REVIEW. Asking price may be null.\n\n"
                 f"{asking_instruction}\nLot ID: {lot.name}\nPrepared metadata:\n{listing_data}"
             ),
         }
@@ -213,14 +282,14 @@ def _request(client: ResponsesClient, config: AppConfig, lot: Path) -> tuple[dic
     if sum(path.stat().st_size for path in transmitted) > config.evaluation_max_total_image_bytes:
         raise EvaluationError("Prepared images exceed the total evaluation upload limit.")
     if contact.is_file():
-        content.append({"type": "input_image", "image_url": _data_url(contact, config.evaluation_max_image_bytes), "detail": "high"})
+        content.append({"type": "input_image", "image_url": _data_url(contact, config.evaluation_max_image_bytes), "detail": "low"})
     for path in image_paths:
-        content.append({"type": "input_image", "image_url": _data_url(path, config.evaluation_max_image_bytes), "detail": "high"})
+        content.append({"type": "input_image", "image_url": _data_url(path, config.evaluation_max_image_bytes), "detail": "original"})
 
     response = client.create(
         model=config.openai_model,
         store=False,
-        reasoning={"effort": "low"},
+        reasoning={"effort": "medium"},
         max_output_tokens=config.evaluation_max_output_tokens,
         max_tool_calls=config.evaluation_max_tool_calls,
         tools=[{"type": "web_search"}],
@@ -267,22 +336,28 @@ def _safe_source_url(value: object) -> str | None:
 
 def _calculate(raw: dict[str, Any], config: AppConfig) -> dict[str, Any]:
     priced = [card for card in raw["cards"] if card["unit_market_low"] is not None and card["unit_market_high"] is not None]
-    gross_low = sum(float(card["unit_market_low"]) * int(card["quantity"]) for card in priced)
-    gross_high = sum(float(card["unit_market_high"]) * int(card["quantity"]) for card in priced)
+    singles_low = sum(float(card["unit_market_low"]) * int(card["quantity"]) for card in priced)
+    singles_high = sum(float(card["unit_market_high"]) * int(card["quantity"]) for card in priced)
+    bulk = raw.get("bulk_lot", {})
+    bulk_low = float(bulk.get("market_low") or 0)
+    bulk_high = float(bulk.get("market_high") or 0)
+    gross_low = singles_low + bulk_low
+    gross_high = singles_high + bulk_high
     expected_resale = (gross_low + gross_high) / 2
     fees = expected_resale * config.platform_fee_rate
-    expected_net_before_buy = expected_resale - fees - config.default_shipping_cost
+    shipping = config.default_shipping_cost if expected_resale > 0 else 0.0
+    expected_net_before_buy = expected_resale - fees - shipping
     max_buy = max(0.0, math.floor(min(gross_low * config.max_buy_fraction, expected_net_before_buy * 0.70)))
-    expected_profit = expected_net_before_buy - max_buy
+    expected_profit = max(0.0, expected_net_before_buy - max_buy)
     asking = raw.get("asking_price")
-    if raw.get("review_required") or len(priced) != len(raw["cards"]):
+    if gross_high <= 0:
         verdict = "REVIEW"
     elif asking is None:
         verdict = "CONDITIONAL"
     elif float(asking) <= max_buy * 0.90:
-        verdict = "BUY"
+        verdict = "BUY WITH CHECKS" if raw.get("review_required") else "BUY"
     elif float(asking) <= max_buy:
-        verdict = "NEGOTIATE"
+        verdict = "NEGOTIATE WITH CHECKS" if raw.get("review_required") else "NEGOTIATE"
     else:
         verdict = "PASS"
     return {
@@ -290,12 +365,17 @@ def _calculate(raw: dict[str, Any], config: AppConfig) -> dict[str, Any]:
         "gross_resale_high": round(gross_high, 2),
         "expected_resale": round(expected_resale, 2),
         "estimated_fees": round(fees, 2),
-        "estimated_shipping": round(config.default_shipping_cost, 2),
+        "singles_resale_low": round(singles_low, 2),
+        "singles_resale_high": round(singles_high, 2),
+        "bulk_resale_low": round(bulk_low, 2),
+        "bulk_resale_high": round(bulk_high, 2),
+        "estimated_shipping": round(shipping, 2),
         "max_buy": round(max_buy, 2),
         "expected_profit_at_max_buy": round(expected_profit, 2),
         "roi_at_max_buy_percent": round(expected_profit / max_buy * 100, 1) if max_buy else 0,
         "verdict": verdict,
         "priced_card_count": len(priced),
+        "identified_card_count": len(raw["cards"]),
     }
 
 
@@ -306,15 +386,19 @@ def _recommendations(lot_id: str, raw: dict[str, Any], calc: dict[str, Any]) -> 
         action = f"Offer no more than **{_money(calc['max_buy'])}**. Enter the seller's asking price for a final BUY/PASS comparison."
     elif headline == "REVIEW":
         action = f"Do not make a final offer yet. Conditional ceiling: **{_money(calc['max_buy'])}** after the checks below."
-    elif headline == "BUY":
+    elif headline in {"BUY", "BUY WITH CHECKS"}:
         action = f"Buy at the listed {_money(float(asking))}; calculated ceiling is **{_money(calc['max_buy'])}**."
-    elif headline == "NEGOTIATE":
+        if headline == "BUY WITH CHECKS":
+            action += " Confirm the seller, quantity, and pickup contents before paying."
+    elif headline in {"NEGOTIATE", "NEGOTIATE WITH CHECKS"}:
         action = f"Negotiate to **{_money(calc['max_buy'])} or less**."
     else:
         action = f"Pass at {_money(float(asking))}; calculated ceiling is **{_money(calc['max_buy'])}**."
     lines = [
         f"# {headline}: {lot_id}", "", action, "", "## Numbers", "",
         f"- Estimated resale: **{_money(calc['gross_resale_low'])}–{_money(calc['gross_resale_high'])}**",
+        f"- Visible priced singles: {_money(calc['singles_resale_low'])}–{_money(calc['singles_resale_high'])}",
+        f"- Unitemized bulk estimate: {_money(calc['bulk_resale_low'])}–{_money(calc['bulk_resale_high'])}",
         f"- Expected profit if bought at the ceiling: **{_money(calc['expected_profit_at_max_buy'])}**",
         f"- Estimated ROI at the ceiling: **{calc['roi_at_max_buy_percent']:.1f}%**",
         f"- Assumed fees: {_money(calc['estimated_fees'])}; shipping/materials: {_money(calc['estimated_shipping'])}",
@@ -330,6 +414,22 @@ def _recommendations(lot_id: str, raw: dict[str, Any], calc: dict[str, Any]) -> 
             if part
         )
         lines.append(f"- {card['quantity']}× **{_inline(card['name'])}** — {detail}; {price}")
+    if not raw["cards"]:
+        lines.append("- No individual card names were sufficiently visible.")
+    bulk = raw.get("bulk_lot", {})
+    if bulk.get("market_low") is not None and bulk.get("market_high") is not None:
+        lines.extend(
+            [
+                "",
+                "## Bulk remainder",
+                "",
+                (
+                    f"- {_money(float(bulk['market_low']))}–"
+                    f"{_money(float(bulk['market_high']))}: "
+                    f"{_inline(bulk.get('basis', 'conservative bulk estimate'))}"
+                ),
+            ]
+        )
     checks = [*raw["uncertainties"], *raw["recommended_photos"]]
     if checks:
         lines.extend(["", "## Check before buying", ""])
@@ -350,6 +450,14 @@ def _summary(lot_id: str, raw: dict[str, Any], calc: dict[str, Any]) -> str:
                     f"- [{_inline(source['title'])}]({url}) — retrieved "
                     f"{_inline(source['retrieved_at'])}"
                 )
+    for source in raw.get("bulk_lot", {}).get("sources", []):
+        url = _safe_source_url(source["url"])
+        if url and url not in seen:
+            seen.add(url)
+            lines.append(
+                f"- [{_inline(source['title'])}]({url}) — retrieved "
+                f"{_inline(source['retrieved_at'])}"
+            )
     if not seen:
         lines.append("- No usable price source was returned; manual review is required.")
     lines.append("")
@@ -362,9 +470,14 @@ def evaluate_lot(config: AppConfig, lot: Path, client: ResponsesClient) -> Path 
         return None
     fingerprint = _fingerprint(prepared)
     completed = lot / "Evaluation" / "evaluation.json"
+    existing: dict[str, Any] | None = None
     if completed.is_file():
         existing = json.loads(completed.read_text(encoding="utf-8"))
-        if existing.get("input_fingerprint") == fingerprint:
+        if existing.get("input_fingerprint") != fingerprint:
+            raise EvaluationError(
+                "Prepared inputs changed after evaluation; remove Evaluation to review intentionally."
+            )
+        if not _evaluation_needs_upgrade(existing):
             phone_copy = lot / "recommendations.md"
             if not phone_copy.is_file():
                 phone_copy.write_text(
@@ -372,24 +485,28 @@ def evaluate_lot(config: AppConfig, lot: Path, client: ResponsesClient) -> Path 
                     encoding="utf-8",
                 )
             return lot / "Evaluation"
-        raise EvaluationError("Prepared inputs changed after evaluation; remove Evaluation to review intentionally.")
     if not _claim(lot):
         return None
     claim = lot / CLAIM_NAME
     building = lot / "Evaluation.__building__"
     try:
+        if existing is not None and (lot / "Evaluation").is_dir():
+            archived = _archive_previous_evaluation(lot, existing)
+            logger.info("Archived previous evaluation for %s at %s", lot.name, archived.name)
         if building.exists():
             shutil.rmtree(building)
         building.mkdir()
         raw, api_usage = _request(client, config, lot)
         calc = _calculate(raw, config)
         payload = {
-            "schema_version": 1, "lot_id": lot.name, "evaluated_at": _utc_now(),
+            "schema_version": 1, "evaluator_version": EVALUATOR_VERSION,
+            "lot_id": lot.name, "evaluated_at": _utc_now(),
             "input_fingerprint": fingerprint, "identification": raw, "calculation": calc,
         }
         (building / "evaluation.json").write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         (building / "api_usage.json").write_text(json.dumps(api_usage, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         sources = [source for card in raw["cards"] for source in card["sources"]]
+        sources.extend(raw.get("bulk_lot", {}).get("sources", []))
         (building / "price_sources.json").write_text(json.dumps(sources, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         recommendations = _recommendations(lot.name, raw, calc)
         (building / "evaluation_summary.md").write_text(_summary(lot.name, raw, calc), encoding="utf-8")
@@ -414,6 +531,15 @@ def evaluate_lot(config: AppConfig, lot: Path, client: ResponsesClient) -> Path 
                     notes=raw["summary"],
                 ),
                 preserve_existing=True,
+                overwrite_fields={
+                    "tcg",
+                    "asking_price",
+                    "verdict",
+                    "max_buy",
+                    "expected_resale",
+                    "expected_profit",
+                    "roi_percent",
+                },
             )
         except OSError:
             logger.exception("Could not update master deal index for %s", lot.name)
@@ -483,7 +609,18 @@ class EvaluationWorker:
                     continue
                 evaluation_complete = (lot / "Evaluation" / "evaluation.json").is_file()
                 phone_copy_complete = (lot / "recommendations.md").is_file()
-                if (evaluation_complete and phone_copy_complete) or (
+                upgrade_needed = False
+                if evaluation_complete:
+                    try:
+                        payload = json.loads(
+                            (lot / "Evaluation" / "evaluation.json").read_text(
+                                encoding="utf-8"
+                            )
+                        )
+                        upgrade_needed = _evaluation_needs_upgrade(payload)
+                    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+                        logger.exception("Could not inspect evaluation version for %s", lot.name)
+                if (evaluation_complete and phone_copy_complete and not upgrade_needed) or (
                     not evaluation_complete and (lot / "evaluation_error.json").is_file()
                 ):
                     continue
