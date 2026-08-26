@@ -17,11 +17,13 @@ Pull requests run:
 - Bandit static analysis for Python security issues
 - pip-audit against Python dependency advisories
 
-GitHub Actions dependencies are pinned to full commit SHAs.
+GitHub Actions dependencies are pinned to full commit SHAs and CI uses read-only repository permissions.
 
 ## Local file safety
 
 The app only accepts a phone trigger named `process` (case-insensitive, any extension) when the trigger is a real file directly inside the configured app root. Trigger paths outside that root are rejected. Generated lot IDs are restricted to a safe filename character set to prevent path traversal.
+
+Because the app processes marketplace images, Pillow is constrained to 12.3.0 or newer within the 12.x line to include current 2026 image-parser security fixes.
 
 ## Reporting
 
