@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 import shutil
 import uuid
@@ -10,6 +11,8 @@ from typing import Callable
 
 from .config import AppConfig
 
+
+logger = logging.getLogger(__name__)
 
 LOT_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
@@ -105,7 +108,7 @@ def submit_current_lot(
             try:
                 shutil.move(str(destination), str(intake))
             except Exception:
-                pass
+                logger.exception("Failed to roll back lot after submission error")
         if staging.exists():
             try:
                 staging.rmdir()
