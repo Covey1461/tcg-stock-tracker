@@ -20,7 +20,7 @@ from .processor import _pid_is_running
 
 logger = logging.getLogger(__name__)
 CLAIM_NAME = ".evaluation_claim.json"
-EVALUATOR_VERSION = 2
+EVALUATOR_VERSION = 3
 
 
 class EvaluationError(RuntimeError):
@@ -92,6 +92,37 @@ def _schema() -> dict[str, Any]:
             "sources",
         ],
     }
+    visible_signal = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "category": {"type": "string"},
+            "description": {"type": "string"},
+            "quantity": {"type": "integer", "minimum": 1},
+            "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        },
+        "required": ["category", "description", "quantity", "confidence"],
+    }
+    visible_upside = {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "signals": {"type": "array", "items": visible_signal},
+            "incremental_market_low": {"type": ["number", "null"], "minimum": 0},
+            "incremental_market_high": {"type": ["number", "null"], "minimum": 0},
+            "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+            "basis": {"type": "string"},
+            "sources": {"type": "array", "items": source},
+        },
+        "required": [
+            "signals",
+            "incremental_market_low",
+            "incremental_market_high",
+            "confidence",
+            "basis",
+            "sources",
+        ],
+    }
     return {
         "type": "object",
         "additionalProperties": False,
@@ -100,6 +131,7 @@ def _schema() -> dict[str, Any]:
             "asking_price": {"type": ["number", "null"], "minimum": 0},
             "cards": {"type": "array", "items": card},
             "bulk_lot": bulk_lot,
+            "visible_upside": visible_upside,
             "unidentified_items": {"type": "array", "items": {"type": "string"}},
             "uncertainties": {"type": "array", "items": {"type": "string"}},
             "recommended_photos": {"type": "array", "items": {"type": "string"}},
@@ -107,8 +139,9 @@ def _schema() -> dict[str, Any]:
             "summary": {"type": "string"},
         },
         "required": [
-            "tcg", "asking_price", "cards", "bulk_lot", "unidentified_items", "uncertainties",
-            "recommended_photos", "review_required", "summary",
+            "tcg", "asking_price", "cards", "bulk_lot", "visible_upside",
+            "unidentified_items", "uncertainties", "recommended_photos", "review_required",
+            "summary",
         ],
     }
 
@@ -127,9 +160,11 @@ def _fingerprint(prepared: Path) -> str:
 
 def _evaluation_needs_upgrade(payload: dict[str, Any]) -> bool:
     version = int(payload.get("evaluator_version", 1))
-    cards = payload.get("identification", {}).get("cards", [])
-    resale = float(payload.get("calculation", {}).get("expected_resale", 0) or 0)
-    return version < EVALUATOR_VERSION and not cards and resale <= 0
+    calculation = payload.get("calculation", {})
+    return version < EVALUATOR_VERSION or (
+        version == EVALUATOR_VERSION
+        and "visible_upside_ceiling_credit" not in calculation
+    )
 
 
 def _archive_previous_evaluation(lot: Path, payload: dict[str, Any]) -> Path:
@@ -229,6 +264,20 @@ def _enforce_web_evidence(result: dict[str, Any], actual_urls: set[str]) -> None
         bulk["market_low"] = None
         bulk["market_high"] = None
         missing_evidence = True
+    upside = result.get("visible_upside", {})
+    upside["sources"] = [
+        source
+        for source in upside.get("sources", [])
+        if str(source.get("url", "")).strip() in actual_urls
+    ]
+    if (
+        upside.get("incremental_market_low") is not None
+        and upside.get("incremental_market_high") is not None
+        and not upside.get("sources")
+    ):
+        upside["incremental_market_low"] = None
+        upside["incremental_market_high"] = None
+        missing_evidence = True
     if missing_evidence:
         result["review_required"] = True
         result.setdefault("uncertainties", []).append(
@@ -272,7 +321,18 @@ def _request(client: ResponsesClient, config: AppConfig, lot: Path) -> tuple[dic
                 "data. retrieved_at must be today's ISO date. Set review_required only when no meaningful "
                 "valuation is possible or a specific ambiguity could reverse the recommended deal action. "
                 "Routine printing, finish, or condition uncertainty should cause a conservative discount "
-                "and a check item, not automatic REVIEW. Asking price may be null.\n\n"
+                "and a check item, not automatic REVIEW.\n\n"
+                "Crucially, do not value visibly promising but unreadable cards at zero. Record objective "
+                "visual signals in visible_upside when the photos clearly show cards likely worth more than "
+                "ordinary bulk, such as old/vintage borders, foil or etched shine, rare or mythic symbols, "
+                "showcase/full-art treatments, serialized or promotional styling, or recognizable Pokémon "
+                "holo/ultra-rare treatments. Assign a conservative incremental_market_low/high for those "
+                "specific visible cards using current category-level comps. This is the value ABOVE their "
+                "ordinary bulk allocation and must exclude every card already priced in cards, so it cannot "
+                "double-count either singles or bulk. Use a low estimate when identity, printing, or condition "
+                "is unclear, but a clear good-card signal must raise the resale estimate and buying ceiling. "
+                "Do not add upside for boxes, unseen cards, ordinary modern cards, glare, or merely possible "
+                "hits. Asking price may be null.\n\n"
                 f"{asking_instruction}\nLot ID: {lot.name}\nPrepared metadata:\n{listing_data}"
             ),
         }
@@ -341,13 +401,47 @@ def _calculate(raw: dict[str, Any], config: AppConfig) -> dict[str, Any]:
     bulk = raw.get("bulk_lot", {})
     bulk_low = float(bulk.get("market_low") or 0)
     bulk_high = float(bulk.get("market_high") or 0)
-    gross_low = singles_low + bulk_low
-    gross_high = singles_high + bulk_high
+    upside = raw.get("visible_upside", {})
+    upside_low = float(upside.get("incremental_market_low") or 0)
+    upside_high = float(upside.get("incremental_market_high") or 0)
+    upside_confidence = float(upside.get("confidence") or 0)
+    upside_ceiling_credit = upside_low + (
+        max(0.0, upside_high - upside_low) * upside_confidence * 0.50
+    )
+    gross_low = singles_low + bulk_low + upside_low
+    gross_high = singles_high + bulk_high + upside_high
     expected_resale = (gross_low + gross_high) / 2
     fees = expected_resale * config.platform_fee_rate
     shipping = config.default_shipping_cost if expected_resale > 0 else 0.0
     expected_net_before_buy = expected_resale - fees - shipping
-    max_buy = max(0.0, math.floor(min(gross_low * config.max_buy_fraction, expected_net_before_buy * 0.70)))
+    base_resale_low = singles_low + bulk_low
+    base_resale_high = singles_high + bulk_high
+    base_expected_resale = (base_resale_low + base_resale_high) / 2
+    base_shipping = config.default_shipping_cost if base_expected_resale > 0 else 0.0
+    base_net_before_buy = (
+        base_expected_resale
+        - (base_expected_resale * config.platform_fee_rate)
+        - base_shipping
+    )
+    max_buy_without_upside = max(
+        0.0,
+        math.floor(
+            min(
+                base_resale_low * config.max_buy_fraction,
+                base_net_before_buy * 0.70,
+            )
+        ),
+    )
+    ceiling_resale_basis = singles_low + bulk_low + upside_ceiling_credit
+    max_buy = max(
+        0.0,
+        math.floor(
+            min(
+                ceiling_resale_basis * config.max_buy_fraction,
+                expected_net_before_buy * 0.70,
+            )
+        ),
+    )
     expected_profit = max(0.0, expected_net_before_buy - max_buy)
     asking = raw.get("asking_price")
     if gross_high <= 0:
@@ -369,8 +463,15 @@ def _calculate(raw: dict[str, Any], config: AppConfig) -> dict[str, Any]:
         "singles_resale_high": round(singles_high, 2),
         "bulk_resale_low": round(bulk_low, 2),
         "bulk_resale_high": round(bulk_high, 2),
+        "visible_upside_low": round(upside_low, 2),
+        "visible_upside_high": round(upside_high, 2),
+        "visible_upside_ceiling_credit": round(upside_ceiling_credit, 2),
         "estimated_shipping": round(shipping, 2),
         "max_buy": round(max_buy, 2),
+        "max_buy_without_visible_upside": round(max_buy_without_upside, 2),
+        "visible_upside_ceiling_increase": round(
+            max(0.0, max_buy - max_buy_without_upside), 2
+        ),
         "expected_profit_at_max_buy": round(expected_profit, 2),
         "roi_at_max_buy_percent": round(expected_profit / max_buy * 100, 1) if max_buy else 0,
         "verdict": verdict,
@@ -398,6 +499,14 @@ def _recommendations(lot_id: str, raw: dict[str, Any], calc: dict[str, Any]) -> 
         f"# {headline}: {lot_id}", "", action, "", "## Numbers", "",
         f"- Estimated resale: **{_money(calc['gross_resale_low'])}–{_money(calc['gross_resale_high'])}**",
         f"- Visible priced singles: {_money(calc['singles_resale_low'])}–{_money(calc['singles_resale_high'])}",
+        f"- Visible good-card upside: {_money(calc['visible_upside_low'])}–{_money(calc['visible_upside_high'])}",
+        f"- Upside credited toward ceiling: {_money(calc['visible_upside_ceiling_credit'])}",
+        (
+            f"- Ceiling impact from visible upside: **+"
+            f"{_money(calc['visible_upside_ceiling_increase'])}** "
+            f"({_money(calc['max_buy_without_visible_upside'])} without it → "
+            f"{_money(calc['max_buy'])} with it)"
+        ),
         f"- Unitemized bulk estimate: {_money(calc['bulk_resale_low'])}–{_money(calc['bulk_resale_high'])}",
         f"- Expected profit if bought at the ceiling: **{_money(calc['expected_profit_at_max_buy'])}**",
         f"- Estimated ROI at the ceiling: **{calc['roi_at_max_buy_percent']:.1f}%**",
@@ -416,6 +525,24 @@ def _recommendations(lot_id: str, raw: dict[str, Any], calc: dict[str, Any]) -> 
         lines.append(f"- {card['quantity']}× **{_inline(card['name'])}** — {detail}; {price}")
     if not raw["cards"]:
         lines.append("- No individual card names were sufficiently visible.")
+    upside = raw.get("visible_upside", {})
+    if upside.get("signals"):
+        lines.extend(["", "## Visible upside", ""])
+        for signal in upside["signals"]:
+            lines.append(
+                f"- {signal['quantity']}× **{_inline(signal['category'])}** — "
+                f"{_inline(signal['description'])} "
+                f"({float(signal['confidence']) * 100:.0f}% confidence)"
+            )
+        if (
+            upside.get("incremental_market_low") is not None
+            and upside.get("incremental_market_high") is not None
+        ):
+            lines.append(
+                f"- Adds **{_money(float(upside['incremental_market_low']))}–"
+                f"{_money(float(upside['incremental_market_high']))}** above ordinary bulk: "
+                f"{_inline(upside.get('basis', 'conservative visible-card premium'))}"
+            )
     bulk = raw.get("bulk_lot", {})
     if bulk.get("market_low") is not None and bulk.get("market_high") is not None:
         lines.extend(
@@ -451,6 +578,14 @@ def _summary(lot_id: str, raw: dict[str, Any], calc: dict[str, Any]) -> str:
                     f"{_inline(source['retrieved_at'])}"
                 )
     for source in raw.get("bulk_lot", {}).get("sources", []):
+        url = _safe_source_url(source["url"])
+        if url and url not in seen:
+            seen.add(url)
+            lines.append(
+                f"- [{_inline(source['title'])}]({url}) — retrieved "
+                f"{_inline(source['retrieved_at'])}"
+            )
+    for source in raw.get("visible_upside", {}).get("sources", []):
         url = _safe_source_url(source["url"])
         if url and url not in seen:
             seen.add(url)
@@ -507,6 +642,7 @@ def evaluate_lot(config: AppConfig, lot: Path, client: ResponsesClient) -> Path 
         (building / "api_usage.json").write_text(json.dumps(api_usage, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         sources = [source for card in raw["cards"] for source in card["sources"]]
         sources.extend(raw.get("bulk_lot", {}).get("sources", []))
+        sources.extend(raw.get("visible_upside", {}).get("sources", []))
         (building / "price_sources.json").write_text(json.dumps(sources, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         recommendations = _recommendations(lot.name, raw, calc)
         (building / "evaluation_summary.md").write_text(_summary(lot.name, raw, calc), encoding="utf-8")
