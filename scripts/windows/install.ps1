@@ -62,7 +62,7 @@ if (-not (Test-Path $VenvPython)) {
 }
 
 Write-Host "Installing application..."
-& $VenvPython -m pip install --upgrade pip
+& $VenvPython -m pip install --upgrade "pip>=26.2"
 & $VenvPython -m pip install -e .
 
 if ([string]::IsNullOrWhiteSpace($RootPath)) {
