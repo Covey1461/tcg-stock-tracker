@@ -9,7 +9,8 @@ This is the initial supported deployment path for TCG Resale Evaluator. Google D
 - Google Drive for Desktop
 - A local copy of this repository (GitHub Desktop, `git clone`, or downloaded source)
 
-No API key is required for the v0.1 local/manual workflow.
+No API key is required for local intake and photo preparation. Automatic card identification and
+recommendations are optional and require an OpenAI API key with API billing enabled.
 
 ## Install
 
@@ -63,6 +64,28 @@ powershell -ExecutionPolicy Bypass -File .\scripts\windows\install.ps1 -RootPath
 ```
 
 The app does not move old data when the root changes.
+
+## Enable automatic recommendations
+
+1. Create an API key in your OpenAI API project and set a small project spending limit.
+2. Close the TCG Resale Evaluator.
+3. Run:
+
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File .\scripts\windows\configure-ai.ps1
+   ```
+
+4. Paste the key into the hidden prompt and reopen the desktop shortcut.
+
+The key is stored as a Windows user environment variable, never in Google Drive or this repository.
+The default cost-focused model is `gpt-5.6-luna`; `TCG_OPENAI_MODEL` can override it. The app sends
+only bounded prepared images, uses structured output and web search, requests `store=false`, and
+records token usage and price-source retrieval dates in each lot's `Evaluation/` folder.
+
+When evaluation succeeds, open `recommendations.md` at the top of the completed lot from your phone.
+If the asking price is unknown, the file gives a conditional maximum offer. If
+`evaluation_error.json` appears, inspect the app log, correct the issue, delete that error file, and
+reopen the app to retry.
 
 ## Uninstall
 

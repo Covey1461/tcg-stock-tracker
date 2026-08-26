@@ -13,6 +13,16 @@ if ([string]::IsNullOrWhiteSpace($env:TCG_RESALE_ROOT)) {
     }
 }
 
+foreach ($VariableName in @("TCG_AI_ENABLED", "TCG_OPENAI_MODEL", "OPENAI_API_KEY")) {
+    $CurrentValue = [Environment]::GetEnvironmentVariable($VariableName, "Process")
+    if ([string]::IsNullOrWhiteSpace($CurrentValue)) {
+        $SavedValue = [Environment]::GetEnvironmentVariable($VariableName, "User")
+        if (-not [string]::IsNullOrWhiteSpace($SavedValue)) {
+            [Environment]::SetEnvironmentVariable($VariableName, $SavedValue, "Process")
+        }
+    }
+}
+
 if (-not (Test-Path $Python)) {
     throw "TCG Resale Evaluator is not installed. Run scripts\windows\install.ps1 first."
 }
