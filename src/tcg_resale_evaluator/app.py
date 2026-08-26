@@ -15,11 +15,13 @@ from .watcher import IntakeWatcher
 def open_path(path: Path) -> None:
     path.mkdir(parents=True, exist_ok=True)
     if os.name == "nt":
-        os.startfile(path)  # type: ignore[attr-defined]
+        os.startfile(path)  # type: ignore[attr-defined]  # nosec B606 - opens a trusted local app folder
     else:
-        import subprocess
+        import subprocess  # nosec B404 - fixed OS opener, never uses a shell
 
-        subprocess.Popen(["open" if os.uname().sysname == "Darwin" else "xdg-open", str(path)])
+        subprocess.Popen(  # nosec B603 - executable is fixed and path is passed as one argument
+            ["open" if os.uname().sysname == "Darwin" else "xdg-open", str(path)]
+        )
 
 
 class App(tk.Tk):
