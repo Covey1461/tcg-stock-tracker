@@ -1,43 +1,35 @@
 # TCG Resale Evaluator
 
-A local-first desktop app for turning Marketplace/OfferUp TCG listing photos into an organized, searchable resale workflow without requiring Zapier.
+Local-first tooling for organizing, preparing, indexing, and reviewing TCG collection listings for resale opportunities.
 
-## V1 goals
+## What v0.1 does
 
-- Keep a permanent `New Folder` drop slot in a Google Drive-synced folder.
-- Submit the current lot from the desktop app or from a phone by uploading any file whose base name is `process` (case-insensitive), such as `PROCESS.txt` or `Process.md`.
-- Move submitted lots into a processing queue and immediately recreate a fresh `New Folder` so the next lot can be uploaded while the first is still processing.
-- Delete the `process` trigger only after the move and fresh-folder creation both succeed.
-- Preserve original images and create resized analysis copies.
-- Generate readable filenames, lot metadata, a ChatGPT-ready prompt, and a searchable deal index.
-- Import a final inventory/pricing CSV after a lot is fully sorted.
-- Normalize that inventory and export a second CSV using a configurable buylist profile.
+- Reusable `New Folder` intake for photos and screenshots.
+- One-click **Process Current Lot** submission from the desktop app.
+- Phone-friendly trigger: place any file whose base name is `process` in the app root (`process`, `PROCESS.txt`, `Process.md`, etc.).
+- Waits for Google Drive uploads to settle before moving the lot.
+- Moves the lot into `Processing` and immediately recreates an empty `New Folder`.
+- Deletes the `process` trigger only after a successful move and replacement-folder creation.
+- Maintains a searchable master CSV deal index.
+- Imports a final post-sort inventory CSV, preserves the source, normalizes card/pricing data, and creates a buylist-formatted CSV using a profile.
+- Includes automated tests and security checks for secret leakage, unsafe paths, Python security issues, and vulnerable dependencies.
 
-## Folder layout
+## Security
 
-```text
-TCG Resale Evaluator/
-├── New Folder/                 # reusable intake slot
-├── Processing/                 # submitted lots waiting/being processed
-├── Completed/                  # processed lots
-├── Needs Review/               # failures / ambiguous lots
-├── Data/
-│   └── TCG_Deal_Index.csv      # searchable master index
-└── process.txt                 # optional phone trigger; deleted after successful submit
+No API keys or credentials belong in the repository. Future integrations must use environment variables or an operating-system credential store. See `SECURITY.md` for the security policy and CI checks.
+
+## Development
+
+```bash
+python -m pip install -e '.[dev]'
+pytest -q
+python scripts/secret_scan.py
 ```
 
-## Trigger behavior
+Run the app with:
 
-The trigger matcher uses the file's **base name**, ignoring capitalization and extension:
+```bash
+tcg-resale-evaluator
+```
 
-- `process` ✅
-- `PROCESS.txt` ✅
-- `Process.md` ✅
-- `process.jpg` ✅
-- `process-now.txt` ❌
-
-The trigger is not deleted until the lot has been moved to `Processing` and a replacement `New Folder` has been created. If submission fails, the trigger remains so the app can retry after the problem is fixed.
-
-## Development status
-
-This repository is being built in small tested slices. See `docs/ARCHITECTURE.md` and `docs/WORKFLOW.md`.
+Set `TCG_RESALE_ROOT` if your Google Drive folder lives somewhere else.
