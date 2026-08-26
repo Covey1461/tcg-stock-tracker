@@ -24,3 +24,16 @@ def test_diagnostics_fail_when_root_is_a_file(tmp_path: Path) -> None:
 
     assert not diagnostics_ok(checks)
     assert any(not check.passed for check in checks)
+
+
+def test_diagnostics_require_key_only_when_ai_is_enabled(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    disabled = run_diagnostics(AppConfig(tmp_path / "disabled"))
+    enabled = run_diagnostics(AppConfig(tmp_path / "enabled", ai_enabled=True))
+
+    assert diagnostics_ok(disabled)
+    assert not diagnostics_ok(enabled)
+    assert any("OPENAI_API_KEY" in check.detail for check in enabled)

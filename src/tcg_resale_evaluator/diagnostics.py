@@ -56,8 +56,29 @@ def _check_writable(config: AppConfig) -> DiagnosticCheck:
     return DiagnosticCheck("Root writable", True, str(config.root))
 
 
+def _check_ai_configuration(config: AppConfig) -> DiagnosticCheck:
+    if not config.ai_enabled:
+        return DiagnosticCheck("Automatic recommendations", True, "Disabled (optional)")
+    if not os.getenv("OPENAI_API_KEY", "").strip():
+        return DiagnosticCheck(
+            "Automatic recommendations",
+            False,
+            "Enabled, but OPENAI_API_KEY is not configured",
+        )
+    return DiagnosticCheck(
+        "Automatic recommendations",
+        True,
+        f"Enabled with model {config.openai_model}",
+    )
+
+
 def run_diagnostics(config: AppConfig) -> list[DiagnosticCheck]:
-    return [_check_python(), _check_layout(config), _check_writable(config)]
+    return [
+        _check_python(),
+        _check_layout(config),
+        _check_writable(config),
+        _check_ai_configuration(config),
+    ]
 
 
 def diagnostics_ok(checks: list[DiagnosticCheck]) -> bool:

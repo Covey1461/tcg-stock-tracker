@@ -59,6 +59,10 @@ class DealIndex:
         with self.csv_path.open("r", newline="", encoding="utf-8-sig") as handle:
             return list(csv.DictReader(handle))
 
+    def find(self, lot_id: str) -> dict[str, str] | None:
+        with _INDEX_LOCK:
+            return next((row for row in self._read_all() if row.get("lot_id") == lot_id), None)
+
     def upsert(self, row: DealIndexRow, *, preserve_existing: bool = False) -> None:
         with _INDEX_LOCK:
             self.csv_path.parent.mkdir(parents=True, exist_ok=True)

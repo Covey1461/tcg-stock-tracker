@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -20,6 +21,17 @@ class AppConfig:
     max_dimension: int = 20_000
     prepared_max_dimension: int = 2400
     duplicate_hash_distance: int = 4
+    ai_enabled: bool = False
+    openai_model: str = "gpt-5.6-luna"
+    evaluation_poll_seconds: float = 10.0
+    evaluation_max_images: int = 8
+    evaluation_max_image_bytes: int = 8 * 1024 * 1024
+    evaluation_max_total_image_bytes: int = 32 * 1024 * 1024
+    evaluation_max_output_tokens: int = 6000
+    evaluation_max_tool_calls: int = 6
+    platform_fee_rate: float = 0.13
+    default_shipping_cost: float = 10.0
+    max_buy_fraction: float = 0.55
 
     @property
     def intake_dir(self) -> Path:
@@ -52,3 +64,9 @@ class AppConfig:
         self.review_dir.mkdir(parents=True, exist_ok=True)
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.intake_dir.mkdir(parents=True, exist_ok=True)
+
+
+def config_from_environment(root: Path) -> AppConfig:
+    enabled = os.getenv("TCG_AI_ENABLED", "").strip().casefold() in {"1", "true", "yes", "on"}
+    model = os.getenv("TCG_OPENAI_MODEL", "gpt-5.6-luna").strip() or "gpt-5.6-luna"
+    return AppConfig(root=root, ai_enabled=enabled, openai_model=model)

@@ -6,7 +6,8 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
-from .config import AppConfig
+from .config import AppConfig, config_from_environment
+from .evaluator import EvaluationWorker
 from .intake import SubmissionError, submit_current_lot
 from .inventory_flow import import_inventory_for_lot
 from .logging_config import configure_logging
@@ -37,6 +38,9 @@ class App(tk.Tk):
 
         self.status_var = tk.StringVar(value="Ready. Drop photos into New Folder.")
         self.path_var = tk.StringVar(value=str(config.root))
+        self.ai_var = tk.StringVar(
+            value=f"Automatic recommendations: {'On' if config.ai_enabled else 'Off'}"
+        )
 
         container = ttk.Frame(self, padding=18)
         container.pack(fill="both", expand=True)
@@ -45,6 +49,7 @@ class App(tk.Tk):
             anchor="w"
         )
         ttk.Label(container, textvariable=self.path_var).pack(anchor="w", pady=(4, 18))
+        ttk.Label(container, textvariable=self.ai_var).pack(anchor="w", pady=(0, 12))
 
         primary = ttk.Button(container, text="Process Current Lot", command=self.process_now)
         primary.pack(fill="x", ipady=10)
@@ -74,8 +79,10 @@ class App(tk.Tk):
 
         self.watcher = IntakeWatcher(config, on_status=self._threadsafe_status)
         self.worker = ProcessingWorker(config, on_status=self._threadsafe_status)
+        self.evaluator = EvaluationWorker(config, on_status=self._threadsafe_status)
         self.watcher.start()
         self.worker.start()
+        self.evaluator.start()
         self.protocol("WM_DELETE_WINDOW", self.on_close)
 
     def _threadsafe_status(self, message: str) -> None:
@@ -127,6 +134,7 @@ class App(tk.Tk):
     def on_close(self) -> None:
         self.watcher.stop()
         self.worker.stop()
+        self.evaluator.stop()
         self.destroy()
 
 
@@ -139,7 +147,7 @@ def choose_root() -> Path:
 
 
 def main() -> None:
-    config = AppConfig(root=choose_root())
+    config = config_from_environment(choose_root())
     configure_logging(config)
     app = App(config)
     app.mainloop()

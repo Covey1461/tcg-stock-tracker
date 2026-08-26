@@ -19,6 +19,8 @@
 - `inventory_flow.py`: preserves the raw CSV and creates normalized + buylist outputs.
 - `index_store.py`: master searchable CSV index.
 - `processor.py`: claims, validates, prepares, indexes, and routes queued image lots.
+- `evaluator.py`: opt-in, idempotent image identification, web-priced evaluation, local deal math,
+  source/usage artifacts, index updates, and phone recommendations.
 - `logging_config.py`: bounded rotating application logs under `Data/logs`.
 - `app.py`: lightweight Windows-friendly desktop UI.
 
@@ -40,5 +42,6 @@ Original uploads and generated files have a strict boundary:
 This staging boundary makes retries predictable and prevents a partial artifact set from looking
 complete. Deal-index writes use an in-process lock and an atomic temporary-file replacement.
 
-Image categorization is deliberately heuristic and local. The worker does not call OCR, OpenAI, or
-any external service, and it does not require credentials.
+Image preparation and categorization are deliberately heuristic and local. The separate evaluator is
+disabled by default and requires explicit configuration. It never sends originals, uses an atomic
+claim plus staging folder, fingerprints successful inputs, and writes no credential to Drive.

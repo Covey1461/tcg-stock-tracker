@@ -22,6 +22,10 @@ Local-first tooling for organizing, preparing, indexing, and reviewing TCG colle
 - Moves successful lots to `Completed` and safety/validation failures to `Needs Review` with an
   `error_report.json`; originals remain available in either route.
 - Maintains a searchable master CSV deal index.
+- Optionally identifies visible cards, researches current price evidence, calculates a conservative
+  maximum offer, and updates the deal index using the OpenAI Responses API.
+- Drops a phone-friendly `recommendations.md` directly in every evaluated lot with the verdict,
+  offer ceiling, expected profit, and any missing photos or details.
 - Imports a final post-sort inventory CSV, preserves the source, normalizes card/pricing data, and creates a buylist-formatted CSV using a profile.
 - Includes automated tests and security checks for secret leakage, unsafe paths, Python security issues, and vulnerable dependencies.
 
@@ -53,20 +57,28 @@ Run the installation health check with:
 tcg-resale-doctor
 ```
 
-Set `TCG_RESALE_ROOT` if your Google Drive folder lives somewhere else.
+Set `TCG_RESALE_ROOT` if your Google Drive folder lives somewhere else. Automatic recommendations
+are opt-in; see [Windows setup](docs/WINDOWS_SETUP.md#enable-automatic-recommendations).
 
 ## Completed lot layout
 
 ```text
 Completed/LOT-.../
 ├── Originals/                 # unchanged uploaded files
-└── Prepared/
+├── Prepared/
     ├── Images/                # oriented, resized JPEG copies
     ├── contact_sheet.jpg
     ├── rename_manifest.csv
     ├── listing_data.json
     ├── listing_summary.md
-    └── chatgpt_prompt.txt
+│   └── chatgpt_prompt.txt
+├── Evaluation/
+│   ├── evaluation.json
+│   ├── evaluation_summary.md
+│   ├── price_sources.json
+│   ├── api_usage.json
+│   └── recommendations.md
+└── recommendations.md         # quick phone view
 ```
 
 The desktop app runs the processor in the background. Logs are rotated under

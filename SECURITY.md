@@ -25,6 +25,10 @@ The app only accepts a phone trigger named `process` (case-insensitive, any exte
 
 Because the app processes marketplace images, Pillow is constrained to 12.3.0 or newer within the 12.x line to include current 2026 image-parser security fixes.
 
+The optional evaluator reads `OPENAI_API_KEY` from the process/user environment. It sends only
+bounded normalized images from `Prepared/`, never `Originals/`, and sets `store=false` on Responses
+API requests. Do not put a key into Drive, a lot folder, screenshots, logs, issues, or source files.
+
 ## Reporting
 
 Do not put real credentials or personal data in a public GitHub issue. If a security issue involves an exposed secret, rotate the secret before discussing remediation.

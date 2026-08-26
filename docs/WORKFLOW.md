@@ -18,6 +18,18 @@
 
 If the move fails, the trigger remains in place so the app can retry rather than silently losing the request.
 
+## Automatic recommendation
+
+When the optional AI evaluator is enabled, it scans newly completed lots, sends only bounded prepared
+copies, identifies legible cards, researches current printing-specific price evidence, and performs
+fees/shipping/offer calculations locally. It writes `recommendations.md` at the top of the completed
+lot for quick phone viewing. The full structured result, sources, and API usage remain under
+`Evaluation/`. Existing successful evaluations are fingerprinted and are not billed twice.
+
+If no asking price is visible or recorded, the recommendation is conditional and gives a maximum
+offer. Uncertain card printing, finish, condition, or authenticity produces REVIEW guidance and a
+short list of photos/details to collect.
+
 ## After sorting the physical lot
 
 1. Export/upload your final card inventory CSV with quantities and pricing.
