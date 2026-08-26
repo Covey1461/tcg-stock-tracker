@@ -78,7 +78,7 @@ The app does not move old data when the root changes.
 4. Paste the key into the hidden prompt and reopen the desktop shortcut.
 
 The key is stored as a Windows user environment variable, never in Google Drive or this repository.
-The default cost-focused model is `gpt-5.6-luna`; `TCG_OPENAI_MODEL` can override it. The app sends
+The default balanced-quality model is `gpt-5.6-terra`; `TCG_OPENAI_MODEL` can override it. The app sends
 only bounded prepared images, uses structured output and web search, requests `store=false`, and
 records token usage and price-source retrieval dates in each lot's `Evaluation/` folder.
 

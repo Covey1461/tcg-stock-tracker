@@ -63,7 +63,13 @@ class DealIndex:
         with _INDEX_LOCK:
             return next((row for row in self._read_all() if row.get("lot_id") == lot_id), None)
 
-    def upsert(self, row: DealIndexRow, *, preserve_existing: bool = False) -> None:
+    def upsert(
+        self,
+        row: DealIndexRow,
+        *,
+        preserve_existing: bool = False,
+        overwrite_fields: set[str] | None = None,
+    ) -> None:
         with _INDEX_LOCK:
             self.csv_path.parent.mkdir(parents=True, exist_ok=True)
             rows = self._read_all()
@@ -73,10 +79,10 @@ class DealIndex:
                 if existing.get("lot_id") == row.lot_id:
                     merged = {field: existing.get(field, "") for field in INDEX_FIELDS}
                     if preserve_existing:
+                        always_replace = {"lot_id", "status", "folder", "notes"}
+                        always_replace.update(overwrite_fields or set())
                         for field, value in payload.items():
-                            if field in {"lot_id", "status", "folder", "notes"} or not merged.get(
-                                field
-                            ):
+                            if field in always_replace or not merged.get(field):
                                 merged[field] = value
                     else:
                         merged.update(payload)

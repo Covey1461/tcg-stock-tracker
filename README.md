@@ -24,6 +24,8 @@ Local-first tooling for organizing, preparing, indexing, and reviewing TCG colle
 - Maintains a searchable master CSV deal index.
 - Optionally identifies visible cards, researches current price evidence, calculates a conservative
   maximum offer, and updates the deal index using the OpenAI Responses API.
+- Includes reasonably identifiable visible cards even when printing or finish is uncertain, values
+  the unitemized remainder separately as bulk, and avoids double-counting between those estimates.
 - Drops a phone-friendly `recommendations.md` directly in every evaluated lot with the verdict,
   offer ceiling, expected profit, and any missing photos or details.
 - Imports a final post-sort inventory CSV, preserves the source, normalizes card/pricing data, and creates a buylist-formatted CSV using a profile.
