@@ -70,6 +70,14 @@ def _payload(*, asking_price: float | None = None, review: bool = False) -> dict
             "basis": "No additional bulk represented.",
             "sources": [],
         },
+        "visible_upside": {
+            "signals": [],
+            "incremental_market_low": None,
+            "incremental_market_high": None,
+            "confidence": 0.0,
+            "basis": "No unpriced good-card signals visible.",
+            "sources": [],
+        },
         "unidentified_items": [],
         "uncertainties": ["Card backs are not visible."],
         "recommended_photos": ["Add one clear photo of all card backs."],
@@ -120,7 +128,7 @@ def test_evaluation_creates_phone_recommendation_artifacts_and_updates_index(
     assert "Add one clear photo" in phone_text
     evaluation = json.loads((destination / "evaluation.json").read_text(encoding="utf-8"))
     assert evaluation["identification"]["asking_price"] == 35.0
-    assert evaluation["evaluator_version"] == 2
+    assert evaluation["evaluator_version"] == 3
     assert evaluation["calculation"]["max_buy"] == 44.0
     row = DealIndex(config.index_csv).find(lot.name)
     assert row is not None
@@ -136,6 +144,7 @@ def test_evaluation_creates_phone_recommendation_artifacts_and_updates_index(
     image_details = [item["detail"] for item in content if item["type"] == "input_image"]
     assert image_details == ["low", "original"]
     assert "list every visible card" in content[0]["text"]
+    assert "a clear good-card signal must raise" in content[0]["text"]
 
 
 def test_evaluation_is_idempotent_and_does_not_call_api_twice(tmp_path: Path) -> None:
@@ -220,6 +229,40 @@ def test_bulk_floor_and_partial_card_identification_contribute_to_deal_math(
     assert calculation["verdict"] == "BUY WITH CHECKS"
 
 
+def test_visible_good_cards_raise_resale_and_buying_ceiling(tmp_path: Path) -> None:
+    baseline = _payload(asking_price=1, review=True)
+    baseline["cards"] = []
+    baseline["bulk_lot"]["market_low"] = 100.0  # type: ignore[index]
+    baseline["bulk_lot"]["market_high"] = 200.0  # type: ignore[index]
+    without_upside = _calculate(baseline, AppConfig(tmp_path))
+
+    baseline["visible_upside"] = {
+        "signals": [
+            {
+                "category": "visible old-border or foil cards",
+                "description": "Five distinct cards show clear above-bulk visual traits.",
+                "quantity": 5,
+                "confidence": 0.8,
+            }
+        ],
+        "incremental_market_low": 40.0,
+        "incremental_market_high": 100.0,
+        "confidence": 0.7,
+        "basis": "Conservative category-level premium above ordinary bulk.",
+        "sources": [],
+    }
+    with_upside = _calculate(baseline, AppConfig(tmp_path))
+
+    assert with_upside["visible_upside_low"] == 40.0
+    assert with_upside["visible_upside_ceiling_credit"] == 61.0
+    assert with_upside["gross_resale_low"] == without_upside["gross_resale_low"] + 40.0
+    assert with_upside["max_buy"] > without_upside["max_buy"]
+    assert with_upside["max_buy_without_visible_upside"] == without_upside["max_buy"]
+    assert with_upside["visible_upside_ceiling_increase"] == (
+        with_upside["max_buy"] - without_upside["max_buy"]
+    )
+
+
 def test_api_failure_is_recorded_without_partial_artifacts(tmp_path: Path) -> None:
     config = AppConfig(tmp_path)
     lot = _completed_lot(config)
@@ -247,7 +290,7 @@ def test_changed_inputs_are_not_silently_reevaluated(tmp_path: Path) -> None:
     assert len(client.calls) == 1
 
 
-def test_zero_value_v1_evaluation_is_archived_and_upgraded_once(tmp_path: Path) -> None:
+def test_older_evaluation_is_archived_and_upgraded_once(tmp_path: Path) -> None:
     config = AppConfig(tmp_path)
     lot = _completed_lot(config)
     first_payload = _payload()
@@ -257,7 +300,6 @@ def test_zero_value_v1_evaluation_is_archived_and_upgraded_once(tmp_path: Path) 
     evaluation_path = lot / "Evaluation" / "evaluation.json"
     legacy = json.loads(evaluation_path.read_text(encoding="utf-8"))
     legacy["evaluator_version"] = 1
-    legacy["calculation"]["expected_resale"] = 0
     evaluation_path.write_text(json.dumps(legacy), encoding="utf-8")
     client.payload = _payload()
 
@@ -265,7 +307,7 @@ def test_zero_value_v1_evaluation_is_archived_and_upgraded_once(tmp_path: Path) 
 
     assert (lot / "Evaluation.previous-v1" / "evaluation.json").is_file()
     upgraded = json.loads(evaluation_path.read_text(encoding="utf-8"))
-    assert upgraded["evaluator_version"] == 2
+    assert upgraded["evaluator_version"] == 3
     assert len(client.calls) == 2
 
 
