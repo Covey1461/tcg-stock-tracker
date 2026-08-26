@@ -11,3 +11,14 @@ build/
 logs/
 .DS_Store
 Thumbs.db
+
+# Credentials and local secrets
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+credentials.json
+client_secret*.json
+secrets.json
