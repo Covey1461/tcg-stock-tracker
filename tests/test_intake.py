@@ -67,3 +67,32 @@ def test_empty_intake_does_not_delete_trigger(tmp_path: Path) -> None:
 
     assert trigger.exists()
     assert config.intake_dir.exists()
+
+
+def test_submit_rejects_trigger_outside_app_root(tmp_path: Path) -> None:
+    root = tmp_path / "app"
+    outside = tmp_path / "outside"
+    config = AppConfig(root)
+    config.ensure_layout()
+    outside.mkdir()
+    (config.intake_dir / "photo.jpg").write_bytes(b"photo")
+    trigger = outside / "process.txt"
+    trigger.write_text("go", encoding="utf-8")
+
+    with pytest.raises(SubmissionError):
+        submit_current_lot(config, trigger_path=trigger, lot_id_factory=lambda: "LOT-SAFE")
+
+    assert trigger.exists()
+    assert (config.intake_dir / "photo.jpg").exists()
+
+
+def test_submit_rejects_unsafe_lot_id(tmp_path: Path) -> None:
+    config = AppConfig(tmp_path)
+    config.ensure_layout()
+    (config.intake_dir / "photo.jpg").write_bytes(b"photo")
+
+    with pytest.raises(SubmissionError):
+        submit_current_lot(config, lot_id_factory=lambda: "../escape")
+
+    assert (config.intake_dir / "photo.jpg").exists()
+    assert not (tmp_path.parent / "escape").exists()
