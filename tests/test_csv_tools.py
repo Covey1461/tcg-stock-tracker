@@ -3,7 +3,12 @@ from __future__ import annotations
 import csv
 from pathlib import Path
 
-from tcg_resale_evaluator.csv_tools import BuylistProfile, export_buylist_csv, normalize_inventory_csv
+from tcg_resale_evaluator.csv_tools import (
+    BuylistProfile,
+    export_buylist_csv,
+    normalize_inventory_csv,
+)
+from tcg_resale_evaluator.inventory_flow import import_inventory_for_lot
 
 
 def test_normalize_inventory_and_calculate_value(tmp_path: Path) -> None:
@@ -52,3 +57,14 @@ def test_profile_driven_buylist_export(tmp_path: Path) -> None:
     with output.open("r", newline="", encoding="utf-8-sig") as handle:
         rows = list(csv.DictReader(handle))
     assert rows == [{"Card": "Charizard", "Qty": "2", "Language": "English"}]
+
+
+def test_packaged_default_buylist_profile_is_available(tmp_path: Path) -> None:
+    lot = tmp_path / "lot"
+    source = tmp_path / "cards.csv"
+    source.write_text("Name,Qty\nPikachu,2\n", encoding="utf-8")
+
+    result = import_inventory_for_lot(lot, source)
+
+    assert result.buylist_csv.exists()
+    assert "Quantity,Name,Set" in result.buylist_csv.read_text(encoding="utf-8-sig")

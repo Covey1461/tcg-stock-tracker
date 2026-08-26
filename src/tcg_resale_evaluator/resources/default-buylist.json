@@ -1,0 +1,13 @@
+{
+  "name": "Default Buylist",
+  "columns": [
+    {"header": "Quantity", "source": "quantity"},
+    {"header": "Name", "source": "name"},
+    {"header": "Set", "source": "set_name"},
+    {"header": "Set Code", "source": "set_code"},
+    {"header": "Number", "source": "card_number"},
+    {"header": "Condition", "source": "condition"},
+    {"header": "Finish", "source": "finish"},
+    {"header": "Market Price", "source": "market_price"}
+  ]
+}

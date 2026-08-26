@@ -4,13 +4,13 @@ import logging
 import re
 import shutil
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Callable
 
 from .config import AppConfig
-
+from .index_store import DealIndex, DealIndexRow
 
 logger = logging.getLogger(__name__)
 
@@ -67,7 +67,7 @@ def _validate_trigger(config: AppConfig, trigger_path: Path) -> Path:
 
 
 def _default_lot_id(now: datetime | None = None) -> str:
-    stamp = (now or datetime.now()).strftime("%Y%m%d-%H%M%S")
+    stamp = (now or datetime.now(UTC).astimezone()).strftime("%Y%m%d-%H%M%S")
     return f"LOT-{stamp}-{uuid.uuid4().hex[:6].upper()}"
 
 
@@ -125,5 +125,17 @@ def submit_current_lot(
             raise SubmissionError(
                 f"Lot was queued, but trigger cleanup failed: {trigger_path}: {exc}"
             ) from exc
+
+    try:
+        DealIndex(config.index_csv).upsert(
+            DealIndexRow(
+                lot_id=lot_id,
+                created_at=datetime.now().astimezone().isoformat(timespec="seconds"),
+                status="Queued",
+                folder=str(destination),
+            )
+        )
+    except OSError:
+        logger.exception("Lot queued, but master deal index update failed for %s", lot_id)
 
     return SubmissionResult(lot_id=lot_id, queued_path=destination, trigger_deleted=trigger_deleted)
