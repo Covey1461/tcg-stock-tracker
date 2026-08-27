@@ -20,7 +20,7 @@ from .processor import _pid_is_running
 
 logger = logging.getLogger(__name__)
 CLAIM_NAME = ".evaluation_claim.json"
-EVALUATOR_VERSION = 3
+EVALUATOR_VERSION = 4
 
 
 class EvaluationError(RuntimeError):
@@ -79,6 +79,12 @@ def _schema() -> dict[str, Any]:
             "market_low": {"type": ["number", "null"], "minimum": 0},
             "market_high": {"type": ["number", "null"], "minimum": 0},
             "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+            "era_profile": {
+                "type": "string",
+                "enum": ["older_or_mixed", "mostly_modern", "unknown"],
+            },
+            "era_confidence": {"type": "number", "minimum": 0, "maximum": 1},
+            "era_basis": {"type": "string"},
             "basis": {"type": "string"},
             "sources": {"type": "array", "items": source},
         },
@@ -88,6 +94,9 @@ def _schema() -> dict[str, Any]:
             "market_low",
             "market_high",
             "confidence",
+            "era_profile",
+            "era_confidence",
+            "era_basis",
             "basis",
             "sources",
         ],
@@ -161,9 +170,10 @@ def _fingerprint(prepared: Path) -> str:
 def _evaluation_needs_upgrade(payload: dict[str, Any]) -> bool:
     version = int(payload.get("evaluator_version", 1))
     calculation = payload.get("calculation", {})
-    return version < EVALUATOR_VERSION or (
-        version == EVALUATOR_VERSION
-        and "visible_upside_ceiling_credit" not in calculation
+    # Versions 1-2 need the original zero-value repair. Version 3 already produced useful
+    # recommendations and should not incur an automatic API charge merely for new deal strategy.
+    return version <= 2 or (
+        version == 3 and "visible_upside_ceiling_credit" not in calculation
     )
 
 
@@ -317,6 +327,10 @@ def _request(client: ResponsesClient, config: AppConfig, lot: Path) -> tuple[dic
                 "quantity estimate. bulk_lot.market_low/high must cover only the remaining unsorted cards "
                 "after the individually listed visible cards, so do not double-count. Use conservative "
                 "current bulk comps and clearly distinguish seller-claimed quantity from visible evidence. "
+                "Classify bulk_lot.era_profile from the visible cards: older_or_mixed only when the "
+                "photos show meaningful pre-modern, vintage, or clearly multi-era contents; mostly_modern "
+                "when the remainder appears predominantly recent; otherwise unknown. Base era_confidence "
+                "and era_basis on photo evidence, not seller claims. "
                 "Use web search for current card and bulk evidence; prefer sold or reputable marketplace "
                 "data. retrieved_at must be today's ISO date. Set review_required only when no meaningful "
                 "valuation is possible or a specific ambiguity could reverse the recommended deal action. "
@@ -467,8 +481,41 @@ def _calculate(raw: dict[str, Any], config: AppConfig) -> dict[str, Any]:
             )
         ),
     )
-    expected_profit = max(0.0, expected_net_before_buy - max_buy)
+    visible_upside_ceiling_increase = max(0.0, max_buy - max_buy_without_upside)
     asking = raw.get("asking_price")
+    visible_cards_net_low = max(
+        0.0,
+        singles_low * (1 - config.platform_fee_rate)
+        - (config.default_shipping_cost if singles_low > 0 else 0.0),
+    )
+    older_mixed_bulk = (
+        bulk.get("era_profile") == "older_or_mixed"
+        and float(bulk.get("era_confidence") or 0) >= 0.60
+        and (bulk_low > 0 or bulk.get("estimated_unitemized_quantity") is not None)
+    )
+    visible_backstop_candidate = 0.0
+    max_buy_without_visible_backstop = max_buy
+    if older_mixed_bulk and singles_low > 0:
+        visible_backstop_candidate = min(
+            singles_low,
+            expected_net_before_buy,
+            visible_cards_net_low + (bulk_low * 0.50) + (upside_ceiling_credit * 0.25),
+        )
+        max_buy = max(max_buy, math.floor(visible_backstop_candidate))
+    backstop_increase = max(0.0, max_buy - max_buy_without_visible_backstop)
+    asking_value = float(asking) if asking is not None else None
+    visible_gross_coverage = (
+        singles_low / asking_value * 100 if asking_value and asking_value > 0 else None
+    )
+    visible_net_coverage = (
+        visible_cards_net_low / asking_value * 100
+        if asking_value and asking_value > 0
+        else None
+    )
+    near_visible_coverage = bool(
+        visible_gross_coverage is not None and visible_gross_coverage >= 75.0
+    )
+    expected_profit = max(0.0, expected_net_before_buy - max_buy)
     if gross_high <= 0:
         verdict = "REVIEW"
     elif asking is None:
@@ -476,7 +523,10 @@ def _calculate(raw: dict[str, Any], config: AppConfig) -> dict[str, Any]:
     elif float(asking) <= max_buy * 0.90:
         verdict = "BUY WITH CHECKS" if raw.get("review_required") else "BUY"
     elif float(asking) <= max_buy:
-        verdict = "NEGOTIATE WITH CHECKS" if raw.get("review_required") else "NEGOTIATE"
+        if backstop_increase > 0 and near_visible_coverage:
+            verdict = "BUY WITH CHECKS"
+        else:
+            verdict = "NEGOTIATE WITH CHECKS" if raw.get("review_required") else "NEGOTIATE"
     else:
         verdict = "PASS"
     return {
@@ -493,9 +543,21 @@ def _calculate(raw: dict[str, Any], config: AppConfig) -> dict[str, Any]:
         "visible_upside_ceiling_credit": round(upside_ceiling_credit, 2),
         "estimated_shipping": round(shipping, 2),
         "max_buy": round(max_buy, 2),
+        "max_buy_without_visible_backstop": round(max_buy_without_visible_backstop, 2),
+        "visible_backstop_candidate": round(visible_backstop_candidate, 2),
+        "visible_backstop_ceiling_increase": round(backstop_increase, 2),
+        "visible_backstop_applied": backstop_increase > 0,
+        "bulk_era_profile": bulk.get("era_profile", "unknown"),
+        "visible_cards_net_low": round(visible_cards_net_low, 2),
+        "visible_gross_coverage_percent": (
+            round(visible_gross_coverage, 1) if visible_gross_coverage is not None else None
+        ),
+        "visible_net_coverage_percent": (
+            round(visible_net_coverage, 1) if visible_net_coverage is not None else None
+        ),
         "max_buy_without_visible_upside": round(max_buy_without_upside, 2),
         "visible_upside_ceiling_increase": round(
-            max(0.0, max_buy - max_buy_without_upside), 2
+            visible_upside_ceiling_increase, 2
         ),
         "expected_profit_at_max_buy": round(expected_profit, 2),
         "roi_at_max_buy_percent": round(expected_profit / max_buy * 100, 1) if max_buy else 0,
@@ -524,13 +586,14 @@ def _recommendations(lot_id: str, raw: dict[str, Any], calc: dict[str, Any]) -> 
         f"# {headline}: {lot_id}", "", action, "", "## Numbers", "",
         f"- Estimated resale: **{_money(calc['gross_resale_low'])}–{_money(calc['gross_resale_high'])}**",
         f"- Visible priced singles: {_money(calc['singles_resale_low'])}–{_money(calc['singles_resale_high'])}",
+        f"- Conservative net from visible priced singles: {_money(calc['visible_cards_net_low'])}",
         f"- Visible good-card upside: {_money(calc['visible_upside_low'])}–{_money(calc['visible_upside_high'])}",
         f"- Upside credited toward ceiling: {_money(calc['visible_upside_ceiling_credit'])}",
         (
             f"- Ceiling impact from visible upside: **+"
             f"{_money(calc['visible_upside_ceiling_increase'])}** "
             f"({_money(calc['max_buy_without_visible_upside'])} without it → "
-            f"{_money(calc['max_buy'])} with it)"
+            f"{_money(calc['max_buy_without_visible_backstop'])} with it)"
         ),
         f"- Unitemized bulk estimate: {_money(calc['bulk_resale_low'])}–{_money(calc['bulk_resale_high'])}",
         f"- Expected profit if bought at the ceiling: **{_money(calc['expected_profit_at_max_buy'])}**",
@@ -538,6 +601,25 @@ def _recommendations(lot_id: str, raw: dict[str, Any], calc: dict[str, Any]) -> 
         f"- Assumed fees: {_money(calc['estimated_fees'])}; shipping/materials: {_money(calc['estimated_shipping'])}",
         "", "## Identified cards", "",
     ]
+    if calc["visible_gross_coverage_percent"] is not None:
+        lines.insert(
+            10,
+            (
+                f"- Visible-card coverage of asking price: "
+                f"{calc['visible_gross_coverage_percent']:.1f}% gross / "
+                f"{calc['visible_net_coverage_percent']:.1f}% after fees and materials"
+            ),
+        )
+    if calc["visible_backstop_applied"]:
+        lines.insert(
+            11,
+            (
+                f"- Older/mixed-bulk backstop: **+"
+                f"{_money(calc['visible_backstop_ceiling_increase'])}** "
+                f"({_money(calc['max_buy_without_visible_backstop'])} baseline → "
+                f"{_money(calc['max_buy'])} ceiling)"
+            ),
+        )
     for card in raw["cards"]:
         price = "price needs verification"
         if card["unit_market_low"] is not None and card["unit_market_high"] is not None:
@@ -579,6 +661,11 @@ def _recommendations(lot_id: str, raw: dict[str, Any], calc: dict[str, Any]) -> 
                     f"- {_money(float(bulk['market_low']))}–"
                     f"{_money(float(bulk['market_high']))}: "
                     f"{_inline(bulk.get('basis', 'conservative bulk estimate'))}"
+                ),
+                (
+                    f"- Era profile: **{_inline(bulk.get('era_profile', 'unknown'))}** "
+                    f"({float(bulk.get('era_confidence') or 0) * 100:.0f}% confidence): "
+                    f"{_inline(bulk.get('era_basis', 'No era evidence recorded.'))}"
                 ),
             ]
         )

@@ -82,6 +82,9 @@ def _payload(*, asking_price: float | None = None, review: bool = False) -> dict
             "market_low": None,
             "market_high": None,
             "confidence": 0.0,
+            "era_profile": "unknown",
+            "era_confidence": 0.0,
+            "era_basis": "No unitemized cards represented.",
             "basis": "No additional bulk represented.",
             "sources": [],
         },
@@ -143,7 +146,7 @@ def test_evaluation_creates_phone_recommendation_artifacts_and_updates_index(
     assert "Add one clear photo" in phone_text
     evaluation = json.loads((destination / "evaluation.json").read_text(encoding="utf-8"))
     assert evaluation["identification"]["asking_price"] == 35.0
-    assert evaluation["evaluator_version"] == 3
+    assert evaluation["evaluator_version"] == 4
     assert evaluation["calculation"]["max_buy"] == 44.0
     row = DealIndex(config.index_csv).find(lot.name)
     assert row is not None
@@ -245,6 +248,9 @@ def test_bulk_floor_and_partial_card_identification_contribute_to_deal_math(
         "market_low": 180.0,
         "market_high": 250.0,
         "confidence": 0.5,
+        "era_profile": "unknown",
+        "era_confidence": 0.0,
+        "era_basis": "Era cannot be assessed.",
         "basis": "Conservative bulk remainder.",
         "sources": [],
     }
@@ -293,6 +299,58 @@ def test_visible_good_cards_raise_resale_and_buying_ceiling(tmp_path: Path) -> N
     )
 
 
+def test_older_mixed_bulk_uses_visible_cards_as_purchase_backstop(tmp_path: Path) -> None:
+    payload = _payload(asking_price=100, review=True)
+    payload["cards"][0]["unit_market_low"] = 50.0  # type: ignore[index]
+    payload["cards"][0]["unit_market_high"] = 60.0  # type: ignore[index]
+    payload["bulk_lot"] = {
+        "claimed_quantity": 1_000,
+        "estimated_unitemized_quantity": 998,
+        "market_low": 50.0,
+        "market_high": 100.0,
+        "confidence": 0.7,
+        "era_profile": "older_or_mixed",
+        "era_confidence": 0.8,
+        "era_basis": "Visible cards span older and newer frames.",
+        "basis": "Conservative older mixed remainder.",
+        "sources": [],
+    }
+
+    calculation = _calculate(payload, AppConfig(tmp_path))
+
+    assert calculation["singles_resale_low"] == 100.0
+    assert calculation["visible_cards_net_low"] == 77.0
+    assert calculation["visible_gross_coverage_percent"] == 100.0
+    assert calculation["visible_backstop_applied"] is True
+    assert calculation["max_buy"] == 100.0
+    assert calculation["visible_backstop_ceiling_increase"] > 0
+    assert calculation["verdict"] == "BUY WITH CHECKS"
+
+
+def test_modern_bulk_does_not_activate_visible_value_backstop(tmp_path: Path) -> None:
+    payload = _payload(asking_price=100, review=True)
+    payload["cards"][0]["unit_market_low"] = 50.0  # type: ignore[index]
+    payload["cards"][0]["unit_market_high"] = 60.0  # type: ignore[index]
+    payload["bulk_lot"] = {
+        "claimed_quantity": 1_000,
+        "estimated_unitemized_quantity": 998,
+        "market_low": 50.0,
+        "market_high": 100.0,
+        "confidence": 0.7,
+        "era_profile": "mostly_modern",
+        "era_confidence": 0.9,
+        "era_basis": "Visible remainder is recent product.",
+        "basis": "Modern bulk remainder.",
+        "sources": [],
+    }
+
+    calculation = _calculate(payload, AppConfig(tmp_path))
+
+    assert calculation["visible_backstop_applied"] is False
+    assert calculation["max_buy"] < 100.0
+    assert calculation["verdict"] == "PASS"
+
+
 def test_api_failure_is_recorded_without_partial_artifacts(tmp_path: Path) -> None:
     config = AppConfig(tmp_path)
     lot = _completed_lot(config)
@@ -337,7 +395,7 @@ def test_older_evaluation_is_archived_and_upgraded_once(tmp_path: Path) -> None:
 
     assert (lot / "Evaluation.previous-v1" / "evaluation.json").is_file()
     upgraded = json.loads(evaluation_path.read_text(encoding="utf-8"))
-    assert upgraded["evaluator_version"] == 3
+    assert upgraded["evaluator_version"] == 4
     assert len(client.calls) == 2
 
 
