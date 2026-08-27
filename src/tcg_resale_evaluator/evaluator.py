@@ -346,38 +346,63 @@ def _request(client: ResponsesClient, config: AppConfig, lot: Path) -> tuple[dic
     for path in image_paths:
         content.append({"type": "input_image", "image_url": _data_url(path, config.evaluation_max_image_bytes), "detail": "original"})
 
-    response = client.create(
-        model=config.openai_model,
-        store=False,
-        reasoning={"effort": "medium"},
-        max_output_tokens=config.evaluation_max_output_tokens,
-        max_tool_calls=config.evaluation_max_tool_calls,
-        tools=[{"type": "web_search"}],
-        include=["web_search_call.action.sources"],
-        input=[{"role": "user", "content": content}],
-        text={"format": {"type": "json_schema", "name": "tcg_lot_evaluation", "strict": True, "schema": _schema()}},
-    )
-    output_text = getattr(response, "output_text", "")
-    if not output_text:
-        raise EvaluationError("The evaluation service returned no structured result.")
-    try:
-        result = json.loads(output_text)
-    except json.JSONDecodeError as exc:
-        raise EvaluationError("The evaluation service returned invalid JSON.") from exc
-    _enforce_web_evidence(result, _actual_web_urls(response))
-    if known_asking:
+    request_kwargs = {
+        "model": config.openai_model,
+        "store": False,
+        "reasoning": {"effort": "medium"},
+        "max_output_tokens": config.evaluation_max_output_tokens,
+        "max_tool_calls": config.evaluation_max_tool_calls,
+        "tools": [{"type": "web_search"}],
+        "include": ["web_search_call.action.sources"],
+        "input": [{"role": "user", "content": content}],
+        "text": {
+            "format": {
+                "type": "json_schema",
+                "name": "tcg_lot_evaluation",
+                "strict": True,
+                "schema": _schema(),
+            }
+        },
+    }
+    for attempt in range(2):
+        response = client.create(**request_kwargs)
+        output_text = getattr(response, "output_text", "")
         try:
-            result["asking_price"] = float(known_asking)
-        except ValueError:
-            logger.warning("Ignoring invalid indexed asking price for %s", lot.name)
-    usage_obj = getattr(response, "usage", None)
-    if hasattr(usage_obj, "to_dict"):
-        usage = usage_obj.to_dict()
-    elif isinstance(usage_obj, dict):
-        usage = usage_obj
-    else:
-        usage = {}
-    return result, {"response_id": getattr(response, "id", ""), "model": config.openai_model, "usage": usage}
+            if not output_text:
+                raise EvaluationError("The evaluation service returned no structured result.")
+            result = json.loads(output_text)
+        except (json.JSONDecodeError, EvaluationError) as exc:
+            if attempt == 0:
+                logger.warning(
+                    "Evaluation response for %s was empty or truncated; retrying once",
+                    lot.name,
+                )
+                continue
+            if isinstance(exc, json.JSONDecodeError):
+                raise EvaluationError(
+                    "The evaluation service returned invalid JSON after one retry."
+                ) from exc
+            raise
+        _enforce_web_evidence(result, _actual_web_urls(response))
+        if known_asking:
+            try:
+                result["asking_price"] = float(known_asking)
+            except ValueError:
+                logger.warning("Ignoring invalid indexed asking price for %s", lot.name)
+        usage_obj = getattr(response, "usage", None)
+        if hasattr(usage_obj, "to_dict"):
+            usage = usage_obj.to_dict()
+        elif isinstance(usage_obj, dict):
+            usage = usage_obj
+        else:
+            usage = {}
+        return result, {
+            "response_id": getattr(response, "id", ""),
+            "model": config.openai_model,
+            "usage": usage,
+            "attempts": attempt + 1,
+        }
+    raise EvaluationError("The evaluation service did not return a usable result.")
 
 
 def _money(value: float) -> str:
@@ -649,6 +674,7 @@ def evaluate_lot(config: AppConfig, lot: Path, client: ResponsesClient) -> Path 
         (building / "recommendations.md").write_text(recommendations, encoding="utf-8")
         building.rename(lot / "Evaluation")
         (lot / "recommendations.md").write_text(recommendations, encoding="utf-8")
+        (lot / "evaluation_error.json").unlink(missing_ok=True)
         try:
             DealIndex(config.index_csv).upsert(
                 DealIndexRow(

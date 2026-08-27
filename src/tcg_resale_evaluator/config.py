@@ -27,7 +27,7 @@ class AppConfig:
     evaluation_max_images: int = 8
     evaluation_max_image_bytes: int = 8 * 1024 * 1024
     evaluation_max_total_image_bytes: int = 32 * 1024 * 1024
-    evaluation_max_output_tokens: int = 8000
+    evaluation_max_output_tokens: int = 12000
     evaluation_max_tool_calls: int = 6
     platform_fee_rate: float = 0.13
     default_shipping_cost: float = 10.0

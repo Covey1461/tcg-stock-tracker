@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tcg-resale-evaluator"
-version = "0.3.2"
+version = "0.3.3"
 description = "Local-first TCG resale listing intake, preparation, indexing, and buylist export tool"
 readme = "README.md"
 requires-python = ">=3.11"
