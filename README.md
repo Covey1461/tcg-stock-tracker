@@ -28,6 +28,9 @@ Local-first tooling for organizing, preparing, indexing, and reviewing TCG colle
   the unitemized remainder separately as bulk, and avoids double-counting between those estimates.
 - Adds a confidence-discounted premium for clearly visible good-card signals and shows exactly how
   much that evidence raises the buying ceiling above the bulk-and-priced-card baseline.
+- Uses conservatively priced visible cards as a downside backstop for older or genuinely mixed-era
+  lots; when those cards cover at least 75% of the asking price, verified remainder value can support
+  a BUY WITH CHECKS closer to the visible-card total. Mostly modern bulk does not receive this bias.
 - Drops a phone-friendly `recommendations.md` directly in every evaluated lot with the verdict,
   offer ceiling, expected profit, and any missing photos or details.
 - Imports a final post-sort inventory CSV, preserves the source, normalizes card/pricing data, and creates a buylist-formatted CSV using a profile.
