@@ -34,6 +34,21 @@ class FakeResponses:
         )
 
 
+class SequencedResponses(FakeResponses):
+    def __init__(self, payload: dict[str, object], outputs: list[str]) -> None:
+        super().__init__(payload)
+        self.outputs = outputs
+
+    def create(self, **kwargs: object) -> SimpleNamespace:
+        self.calls.append(kwargs)
+        output = self.outputs.pop(0)
+        return SimpleNamespace(
+            id=f"resp_test_{len(self.calls)}",
+            output_text=output,
+            usage=SimpleNamespace(to_dict=lambda: {"input_tokens": 100, "output_tokens": 50}),
+        )
+
+
 def _payload(*, asking_price: float | None = None, review: bool = False) -> dict[str, object]:
     return {
         "tcg": "Magic: The Gathering",
@@ -157,6 +172,21 @@ def test_evaluation_is_idempotent_and_does_not_call_api_twice(tmp_path: Path) ->
 
     assert first == second == lot / "Evaluation"
     assert len(client.calls) == 1
+
+
+def test_truncated_json_is_retried_once_and_then_succeeds(tmp_path: Path) -> None:
+    config = AppConfig(tmp_path)
+    lot = _completed_lot(config)
+    (lot / "evaluation_error.json").write_text('{"reason":"previous failure"}')
+    client = SequencedResponses(_payload(), ['{"tcg":"Magic', json.dumps(_payload())])
+
+    destination = evaluate_lot(config, lot, client)
+
+    assert destination == lot / "Evaluation"
+    assert len(client.calls) == 2
+    usage = json.loads((destination / "api_usage.json").read_text(encoding="utf-8"))
+    assert usage["attempts"] == 2
+    assert not (lot / "evaluation_error.json").exists()
 
 
 def test_idempotent_pass_repairs_missing_phone_copy(tmp_path: Path) -> None:
